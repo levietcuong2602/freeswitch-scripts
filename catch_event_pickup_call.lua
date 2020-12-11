@@ -1,7 +1,7 @@
 api = freeswitch.API();
 
 event_timestamp = math.floor(event:getHeader("Event-Date-Timestamp") / 1000)
-freeswitch.consoleLog("info", "CALL HANGUP Event At : [event_timestamp] = " ..event_timestamp .. " => [Event-Date-Local] = " .. event:getHeader("Event-Date-Local") .. "\n");
+freeswitch.consoleLog("info", "CALL ANSWER : [event_timestamp] = " ..event_timestamp .. " => [Event-Date-Local] = " .. event:getHeader("Event-Date-Local") .. "\n");
 
 answer_state = event:getHeader("Answer-State");
 call_direction = event:getHeader("Call-Direction");
@@ -59,19 +59,24 @@ if (answer_state == "hangup") then
 else
     disposition = event:getHeader("Call-Direction");
 end
+if (disposition ~= "WRONG_CALL_STATE") then
+    g_record_dir = "/var/lib/freeswitch/recordings/";
+    freeswitch.consoleLog("info", "START RECORD FROM EVENT [" .. g_record_dir .. record_path .. "] :::: [" .. event_timestamp .. " \n");
 
-if (connect_operator == nil) then
     local request_url = url_api_vbee_dtmf ..
         " caller_id=" .. caller_destination_number ..
         "&call_id=" .. call_id .. 
         "&uuid=" .. channel_call_uuid .. 
-        "&key=-" ..
-        "&state=hangup" ..
-        "&disposition=" .. disposition ..
         "&recording_path=" .. record_path .. 
         "&event_timestamp=" .. event_timestamp;
 
-    freeswitch.consoleLog("info", "HANGUP CALLBACK BEGIN :::: [" .. caller_caller_id_number .. " => " .. caller_destination_number .. "] " .. request_url .. " \n");
+    if (connect_operator == nil) then
+        request_url = request_url .. "&key=-&state=answered&disposition=ANSWERED";
+    else
+        request_url = request_url .. "&key=connected_operator&state=DTMF&disposition=ANSWERED&callee_id=" .. callee_id;
+    end
+
+    freeswitch.consoleLog("info", "CALL_ANSWER CALLBACK BEGIN :::: [" .. caller_caller_id_number .. " => " .. caller_destination_number .. "] " .. request_url .. " \n");
     local response = api:execute("curl", request_url);
-    freeswitch.consoleLog("info", "HANGUP CALLBACK RESULT:::: [" .. caller_caller_id_number .. " => " .. caller_destination_number .. "]" .. response .. " \n");
+    freeswitch.consoleLog("info", "CALL_ANSWER CALLBACK RESULT:::: [" .. caller_caller_id_number .. " => " .. caller_destination_number .. "]" .. response .. " \n");
 end

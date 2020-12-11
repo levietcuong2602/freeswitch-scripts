@@ -25,7 +25,7 @@ DTMF = "-";
 url_callback = "";
 -- url_request = "https://cp-dev.aicallcenter.vn/api/contacts/init-inbound";
 -- url_request = "https://42bd0b51ec6f.ngrok.io/api/v1/hotlines/init-call";
-url_request = "http://ef19a04176e3.ngrok.io/api/v1/ivrs"
+url_request = "http://0c32f5896339.ngrok.io/api/v1/ivrs"
 url_api_vbee_dtmf = "https://pbx-zone0-api.vbeecore.com/api/v1/calls/callback";
 
 local time_record = os.date("%H%M%S");
@@ -90,8 +90,8 @@ function executeBrigdeMobile(callee_id_number)
 
     session:execute("set", "ignore_early_media=true")
     session:execute("set", "instant_ringback=true")
-    session:execute("set","transfer_ringback=file_string:///etc/freeswitch/sounds/music/8000/suite-espanola-op-47-leyenda.wav")
-    session:execute("set", "ringback=file_string:///etc/freeswitch/sounds/music/8000/ponce-preludio-in-e-major.wav")
+    session:execute("set","transfer_ringback=" .. session:getVariable("hold_music"))
+    session:execute("set", "ringback=" ..session:getVariable("us-ring"))
 
     session:execute("set", "hangup_after_bridge=true")
     session:execute("set", "inherit_codec=true")
@@ -129,8 +129,8 @@ function executeBrigdeSoftphone(callee_id_number)
 
     session:execute("set", "ignore_early_media=true");
     session:execute("set", "instant_ringback=true");
-    session:execute("set", "transfer_ringback=file_string:///etc/freeswitch/sounds/music/8000/suite-espanola-op-47-leyenda.wav");
-    session:execute("set", "ringback=file_string:///etc/freeswitch/sounds/music/8000/ponce-preludio-in-e-major.wav");
+    session:execute("set", "transfer_ringback=" .. session:getVariable("hold_music"));
+    session:execute("set", "ringback=" .. session:getVariable("us-ring"));
     session:execute("set", "hangup_after_bridge=true");
     session:execute("set", "inherit_codec=true");
     session:execute("set", "ignore_display_updates=true");
@@ -148,7 +148,7 @@ function executeBrigdeSoftphone(callee_id_number)
         ",call_id=" .. call_id ..
         ",connect_operator=true" .. 
         ",callee_id=" .. callee_id_number ..
-        "}sofia/internal/sip:1002@10.0.34.109:54552;transport=tcp";
+        "}sofia/internal/sip:1002@192.168.0.101:55389;transport=tcp";
     freeswitch.consoleLog("info", fsname .. "execute bridge " .. string_bridge);
     session:execute("bridge", string_bridge);
 
@@ -162,9 +162,9 @@ end
 
 function executeBrigde(callee_id_number)
     -- connect mobile
-    if (string.match(callee_id_number, "softphone:") == nil) then
-        return executeBrigdeMobile(callee_id_number);
-    end
+    -- if (string.match(callee_id_number, "softphone:") == nil) then
+    --     return executeBrigdeMobile(callee_id_number);
+    -- end
 
     -- connect softphone
     return executeBrigdeSoftphone(callee_id_number);
