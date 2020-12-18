@@ -25,8 +25,9 @@ DTMF = "-";
 url_callback = "";
 -- url_request = "https://cp-dev.aicallcenter.vn/api/contacts/init-inbound";
 -- url_request = "https://42bd0b51ec6f.ngrok.io/api/v1/hotlines/init-call";
-url_request = "http://0c32f5896339.ngrok.io/api/v1/ivrs"
+url_request = "https://d538f0e9a54a.ngrok.io/api/v1/ivrs";
 url_api_vbee_dtmf = "https://pbx-zone0-api.vbeecore.com/api/v1/calls/callback";
+session:setVariable("url_api_vbee_dtmf", url_api_vbee_dtmf);
 
 local time_record = os.date("%H%M%S");
 local date_record = os.date("%Y%m%d");
@@ -38,28 +39,28 @@ fsname = "[" .. caller_number .. "] AUTO_CALL_INBOUND >>>> ";
 
 -- define function
 function requestAPIAsyn(request_function, request_params, has_call_back)
-    local request_url = request_function
+    local request_url = request_function;
     if string.sub(request_url, -4) ~= "post" then
-        request_url = request_url .. " post "
+        request_url = request_url .. " post ";
     end
 
     if (request_params ~= nil and type(request_params) == "table") then
         local params_url = ""
         for k, v in pairs(request_params) do
             if (params_url == "") then
-                params_url = k .. "=" .. v
+                params_url = k .. "=" .. v;
             else
-                params_url = params_url .. "&" .. k .. "=" .. v
+                params_url = params_url .. "&" .. k .. "=" .. v;
             end
         end
-        request_url = request_url .. params_url
+        request_url = request_url .. params_url;
     end
 
-    request_url = request_url .. "&event_timestamp=" .. (os.time() * 1000)
+    request_url = request_url .. "&event_timestamp=" .. (os.time() * 1000);
 
-    freeswitch.consoleLog("info", fsname .. "  >>> CALL API >> : " .. request_url)
-    local response = api:execute("curl", request_url)
-    return response
+    freeswitch.consoleLog("info", "Request API URL: " .. request_url);
+    local response = api:execute("curl", request_url);
+    return response;
 end
 
 function getIVR(url_request, caller_id, callee_id)
@@ -124,7 +125,30 @@ function executeBrigdeMobile(callee_id_number)
     return originate_disposition;
 end
 
+function getSipInfo(content, callee_id_number)
+    local raws = JSON:decode(content);
+    local row_count = raws.row_count;
+    if (row_count == 0) then
+        return nil;
+    end
+
+    local registrations = raws.rows;
+    for _, registration in ipairs(registrations) do
+        if (callee_id_number == registration.reg_user) then
+            return registration.url;
+        end
+    end
+
+    return nil;
+end
+
 function executeBrigdeSoftphone(callee_id_number)
+    freeswitch.consoleLog("info", "Check Register Account " .. callee_id_number .. "\n");
+    local url_sip = getSipInfo(api:executeString("show registrations as json"), callee_id_number);
+    freeswitch.consoleLog("info", "SIP Account " .. callee_id_number .. " : " .. string.format("%s", url_sip));
+    if (url_sip == nil) then
+        return 0;
+    end
     freeswitch.consoleLog("info", "Prepare open bridge connect to softphone " .. callee_id_number .. "\n");
 
     session:execute("set", "ignore_early_media=true");
@@ -148,26 +172,70 @@ function executeBrigdeSoftphone(callee_id_number)
         ",call_id=" .. call_id ..
         ",connect_operator=true" .. 
         ",callee_id=" .. callee_id_number ..
-        "}sofia/internal/sip:1002@192.168.0.101:55389;transport=tcp";
+        "}" .. url_sip;
     freeswitch.consoleLog("info", fsname .. "execute bridge " .. string_bridge);
     session:execute("bridge", string_bridge);
 
     local FAILURE_HANGUP_CAUSES = {"USER_BUSY", "USER_NOT_REGISTERED", "NO_USER_RESPONSE", "NO_ANSWER", "CALL_REJECTED"};
     local originate_disposition = session:getVariable("originate_disposition"); -- get code return hangup cause
     freeswitch.consoleLog("info", fsname .. " Bridged originate_disposition :" .. originate_disposition .. "\n")
-    local is_bridge_failure = includes(FAILURE_HANGUP_CAUSES, originate_disposition);
+    if (includes(FAILURE_HANGUP_CAUSES, originate_disposition)) then
+        return 1;
+    end
 
-    return not is_bridge_failure;
+    return 2;
+end
+
+function sendRequestWakeup(callee_id_number)
+    local params = {};
+    params["domain"] = session:getVariable("domain_name") .. ":" .. session:getVariable("internal_sip_port");
+    params["username"]= callee_id_number;
+    params["display_name"] = callee_id_number;
+    
+    local url_request = "https://notification-inbound.iristech.club/api/v1/ios_voip_notifications";
+    local response = requestAPIAsyn(url_request, params);
+    freeswitch.consoleLog("info", "[" ..caller_number .. " >>>>>>>>>>>> " .. callee_id_number .. "] Response Request Wakeup: " .. response);
+end
+
+function wakeupAndBridgeSoftPhone(callee_id_number)
+    local is_request_wakeup = false;
+    local idxCheck = 0;
+    maxCountCheck = 10;
+
+    while (idxCheck < maxCountCheck) do
+        freeswitch.consoleLog("info", "[" ..caller_number .. " >>>>>>>>>>>> " .. callee_id_number .. "] Ping Account And Bridge Time: " .. (idxCheck+1) .. "\n");
+        local result = executeBrigdeSoftphone(callee_id_number);
+
+        if (result == 1 or result == 2) then
+            return true;
+        elseif (result == 0) then
+            freeswitch.consoleLog("info", "[" ..caller_number .. " >>>>>>>>>>>> " .. callee_id_number .. "] Sleep 3000ms\n");
+            if (is_request_wakeup == false) then
+                sendRequestWakeup(callee_id_number);
+                is_request_wakeup = true;
+            end
+            session:execute("sleep", 3000);
+        end
+
+        idxCheck = idxCheck + 1;
+    end
+
+    return false;
 end
 
 function executeBrigde(callee_id_number)
-    -- connect mobile
-    -- if (string.match(callee_id_number, "softphone:") == nil) then
-    --     return executeBrigdeMobile(callee_id_number);
-    -- end
-
+    -- -- connect mobile
+    if (string.match(callee_id_number, "mobile_") ~= nil) then
+        local command, number = string.match(softphone, "mobile_");
+        return executeBrigdeMobile(number);
+    end
     -- connect softphone
-    return executeBrigdeSoftphone(callee_id_number);
+    if (string.match(callee_id_number, "sip_") ~= nil) then
+        local command, number = string.match(softphone, "sip_");
+        return wakeupAndBridgeSoftPhone(callee_id_number);
+    end
+
+    return false;
 end
 
 loop_count = 0;
@@ -217,7 +285,7 @@ function process(plan)
             session:setVariable("read_terminator_used", nil);
             session:setVariable("playback_terminator_used", nil);
 
-            freeswitch.consoleLog("info", "[" .. caller_number .. "] REPEAT >>>>>>>>> [" .. index .. "][" .. repeat_number .. "]");
+            freeswitch.consoleLog("info", "[" .. caller_number .. "] REPEAT >>>>>>>>>>>> [" .. index .. "][" .. repeat_number .. "]");
             freeswitch.consoleLog("info", "[" .. caller_number .. "] >>>>>>>>>>>> Process actions :" .. JSON:encode(actions) .. " >>>>>>>>>>>>\n");
             for _, action in ipairs(actions) do
                 if (type(action) == "table") then
@@ -254,32 +322,32 @@ function process(plan)
                     elseif (includes({"UPLOAD_RECORD", "TYPE_TEXT"}, action["action"]) and action['audio_path']) then
                         -- play audio and get digits
                         local min_digits = 0; -- minimum number of digits
-                        if (plan["min_digits"] ~= nil) then
-                            min_digits = tonumber(plan["min_digits"]);
+                        if (action["min_digits"] ~= nil) then
+                            min_digits = tonumber(action["min_digits"]);
                         end
                         local max_digits = 1; -- maximum number of digits
-                        if (plan["max_digits"] ~= nil) then
-                            max_digits = tonumber(plan["max_digits"]);
+                        if (action["max_digits"] ~= nil) then
+                            max_digits = tonumber(action["max_digits"]);
                         end
                         local tries = 1; -- number of tries for the audio play
-                        if (plan["tries"] ~= nil) then
-                            tries = tonumber(plan["tries"]);
+                        if (action["tries"] ~= nil) then
+                            tries = tonumber(action["tries"]);
                         end
                         local timeout = 1; -- number of milliseconds to wait for a dial when audio playback end
-                        if (plan["timeout"] ~= nil) then
-                            timeout = tonumber(plan["timeout"]);
+                        if (action["timeout"] ~= nil) then
+                            timeout = tonumber(action["timeout"]);
                         end
                         local terminators = ""; -- digits used to end input
-                        if (plan["terminators"] ~= nil) then
-                            terminators = plan["terminators"];
+                        if (action["terminators"] ~= nil) then
+                            terminators = action["terminators"];
                         end
                         local digit_timeout = 1; -- number of millisecond allowed between digits
-                        if (plan["digit_timeout"] ~= nil) then
-                            digit_timeout = tonumber(plan["digit_timeout"]);
+                        if (action["digit_timeout"] ~= nil) then
+                            digit_timeout = tonumber(action["digit_timeout"]);
                         end
                         local valid_digits = ""; -- Regular expression to math digits
-                        if (plan["valid_digits"] ~= nil) then
-                            valid_digits = plan["valid_digits"];
+                        if (action["valid_digits"] ~= nil) then
+                            valid_digits = action["valid_digits"];
                         end
 
                         -- execute play audio and get digits
@@ -315,7 +383,7 @@ function process(plan)
                         end
                         -- process ivr after digit
                         if (digit ~= nil and digit ~= "") then
-                            -- TODO API
+                            -- TODO API PBX dtmf
                             
                             -- correct digit input
                             if (type(plan[digit]) == "table") then
@@ -333,7 +401,7 @@ function process(plan)
                             end
                         end
                     else
-                        freeswitch.consoleLog("info", "[" .. caller_number .. "] >>>>>>>>>>>> Process action :" .. action["action"] .. " >>>>>>>>>>>> Invalid Action >>>>>>>>>>>>\n");
+                        freeswitch.consoleLog("info", "[" .. caller_number .. "] >>>>>>>>>>>> Process action : " .. action["action"] .. " >>>>>>>>>>>> Invalid Action >>>>>>>>>>>>\n");
                     end
                 end
 
