@@ -11,8 +11,7 @@ uuid = session:getVariable("uuid");
 client_redis = redis.connect("127.0.0.1", 6379);
 local response = client_redis:ping();
 freeswitch.consoleLog("info", "check redis ping: " .. string.format("%s", response));
--- caller_number = session:getVariable("caller_id_number")
--- sip_number = session:getVariable("destination_number");
+-- caller_number = session:getVariable("caller_id_number");
 -- sip_number = session:getVariable("destination_number");
 caller_number = "0395468807";
 sip_number = "0913647743";
@@ -23,9 +22,10 @@ variable_string = "";
 file_ext = ".wav";
 DTMF = "-";
 url_callback = "";
--- url_request = "https://cp-dev.aicallcenter.vn/api/contacts/init-inbound";
--- url_request = "https://42bd0b51ec6f.ngrok.io/api/v1/hotlines/init-call";
-url_request = "https://d538f0e9a54a.ngrok.io/api/v1/ivrs";
+domain_aicc = "http://7e242c69e496.ngrok.io";
+-- domain_aicc = "https://api-inbound.iristech.club";
+-- url_request = "https://api-inbound.iristech.club/api/v1/ivrs";
+-- url_request = "http://7e242c69e496.ngrok.io/api/v1/ivrs";
 url_api_vbee_dtmf = "https://pbx-zone0-api.vbeecore.com/api/v1/calls/callback";
 session:setVariable("url_api_vbee_dtmf", url_api_vbee_dtmf);
 
@@ -71,9 +71,12 @@ function getIVR(url_request, caller_id, callee_id)
     freeswitch.consoleLog("info", "AUTO_CALL_INBOUND_IVR_API ==> IVR: " .. response)
     response = JSON:decode(response)
     if (response["status"] == 1) then
-        variable_string = JSON:encode(response["result"]["dial_plan"])
-        url_callback = response["result"]["call_back"]
-        server_ip = response["result"]["sip_ip"]
+        variable_string = JSON:encode(response["result"]["dial_plan"]);;
+        url_callback = response["result"]["call_back"];
+        server_ip = response["result"]["sip_ip"];
+        if (response["result"]["call_id"]) then
+            call_id = response["result"]["call_id"];
+        end
     end
 end
 
@@ -86,7 +89,8 @@ function includes(tables, value)
     return false;
 end
 
-function executeBrigdeMobile(callee_id_number)
+-- TODO
+function executeBrigdeMobile(callee_id_number, agent_id)
     freeswitch.consoleLog("info", "Prepare open bridge connect to mobilephone " .. callee_id_number .. "\n");
 
     session:execute("set", "ignore_early_media=true")
@@ -110,7 +114,8 @@ function executeBrigdeMobile(callee_id_number)
     local string_bridge = "{url_api_vbee_dtmf=" .. url_api_vbee_dtmf ..
         ",record_path=" .. record_path ..
         ",call_id=" .. call_id ..
-        ",connect_operator=true,callee_id=" .. callee_id_number .. 
+        ",connect_operator=true,callee_id=" .. callee_id_number ..
+        ",agent_id=" .. agent_id ..
         "}sofia/external/" .. callee_id_number .. "@" .. server_ip;
     freeswitch.consoleLog("info", fsname .. "execute bridge " .. string_bridge);
     session:execute("bridge", string_bridge);
@@ -142,7 +147,7 @@ function getSipInfo(content, callee_id_number)
     return nil;
 end
 
-function executeBrigdeSoftphone(callee_id_number)
+function executeBrigdeSoftphone(callee_id_number, agent_id)
     freeswitch.consoleLog("info", "Check Register Account " .. callee_id_number .. "\n");
     local url_sip = getSipInfo(api:executeString("show registrations as json"), callee_id_number);
     freeswitch.consoleLog("info", "SIP Account " .. callee_id_number .. " : " .. string.format("%s", url_sip));
@@ -172,6 +177,7 @@ function executeBrigdeSoftphone(callee_id_number)
         ",call_id=" .. call_id ..
         ",connect_operator=true" .. 
         ",callee_id=" .. callee_id_number ..
+        ",agent_id=" .. agent_id ..
         "}" .. url_sip;
     freeswitch.consoleLog("info", fsname .. "execute bridge " .. string_bridge);
     session:execute("bridge", string_bridge);
@@ -197,14 +203,14 @@ function sendRequestWakeup(callee_id_number)
     freeswitch.consoleLog("info", "[" ..caller_number .. " >>>>>>>>>>>> " .. callee_id_number .. "] Response Request Wakeup: " .. response);
 end
 
-function wakeupAndBridgeSoftPhone(callee_id_number)
+function wakeupAndBridgeSoftPhone(callee_id_number, agent_id)
     local is_request_wakeup = false;
     local idxCheck = 0;
     maxCountCheck = 10;
 
     while (idxCheck < maxCountCheck) do
         freeswitch.consoleLog("info", "[" ..caller_number .. " >>>>>>>>>>>> " .. callee_id_number .. "] Ping Account And Bridge Time: " .. (idxCheck+1) .. "\n");
-        local result = executeBrigdeSoftphone(callee_id_number);
+        local result = executeBrigdeSoftphone(callee_id_number, agent_id);
 
         if (result == 1 or result == 2) then
             return true;
@@ -223,18 +229,37 @@ function wakeupAndBridgeSoftPhone(callee_id_number)
     return false;
 end
 
-function executeBrigde(callee_id_number)
+function executeBrigde(callee_id_number, agent_id)
+    freeswitch.consoleLog("info", "execute brigde params: { callee_id_number=" .. callee_id_number .. ", agent_id=" .. agent_id .. " }");
     -- -- connect mobile
     if (string.match(callee_id_number, "mobile_") ~= nil) then
-        local command, number = string.match(softphone, "mobile_");
-        return executeBrigdeMobile(number);
+        local command, number = string.match(callee_id_number, "(mobile_)(.*)");
+        if (number) then
+            return executeBrigdeMobile(number, agent_id);
+        end
     end
     -- connect softphone
     if (string.match(callee_id_number, "sip_") ~= nil) then
-        local command, number = string.match(softphone, "sip_");
-        return wakeupAndBridgeSoftPhone(callee_id_number);
+        local command, number = string.match(callee_id_number, "(sip_)(.*)");
+        freeswitch.consoleLog("info", "{ callee_id_number=" ..callee_id_number .. ", command=" .. string.format("%s", command) .. ", number=" .. string.format("%s", number) .. " }");
+        if (number) then
+            return wakeupAndBridgeSoftPhone(number, agent_id);
+        end
     end
 
+    return false;
+end
+
+function getAgentInfo(connect_queue_id, call_id)
+    local url_request = domain_aicc .. "/api/v1/queues/" .. connect_queue_id .. "/agent?call_id=" .. call_id
+
+    freeswitch.consoleLog("info", "Request API URL: " .. url_request);
+    local response = api:execute("curl", url_request);
+    freeswitch.consoleLog("info", fsname .. " Get Agent By Queue Id: " .. response)
+    response = JSON:decode(response)
+    if (response["status"] == 1) then
+        return response["result"];
+    end
     return false;
 end
 
@@ -245,11 +270,9 @@ function process(plan)
     local plan_digit = nil;
     if (loop_count > max_repeat) then
         if (plan["start_end_script"] ~= nil) then
-            plan_digit.start = plan["start_end_script"];
-            plan_digit.playback = true;
-            plan_digit.terminators = "none";
+            plan_digit = plan["start_end_script"];
             plan_digit.timeout = 1;
-
+            plan_digit.is_end = true;
             loop_count = 0;
             process(plan_digit);
             return 1;
@@ -259,8 +282,7 @@ function process(plan)
     -- process dialplan
     freeswitch.consoleLog("debug", "AUTO_CALL_INBOUND ==> Start process dialplan " ..  uuid .. "\n");
     if (plan["actions"]) then
-        local actions = {};
-        actions = plan["actions"];
+        local actions = plan["actions"];
         local index = 0;
         local repeat_number = 0;
         if (plan["repeat"] ~= nil) then
@@ -309,13 +331,17 @@ function process(plan)
                     elseif (action["action"] == "CONNECT_AGENT" and action["connect_queue_id"]) then
                         local connect_queue_id = action["connect_queue_id"];
                         freeswitch.consoleLog("info", "[" .. caller_number .. "] >>>>>>>>>>>> Connect To CSRs with queue id:" .. action["connect_queue_id"] .. " >>>>>>>>>>>>\n");
-                        -- TODO call api get agent
-                        -- fake data return
-                        local phone_operator = "1002";
-                        local result = executeBrigde(phone_operator);
-                        freeswitch.consoleLog("info", "connect operator: " .. string.format("%s", result));
-                        if (result == true) then
-                            break;
+                        -- call api get agent
+                        local agent_info = getAgentInfo(connect_queue_id, call_id);
+                        if (agent_info) then
+                            local phone_operator = agent_info["operator"];
+                            local agent_id = agent_info["agent_id"];
+                            freeswitch.consoleLog("info", "phone_operator=" .. phone_operator .. ", agent_id=" .. agent_id);
+                            local result = executeBrigde(phone_operator, agent_id);
+                            freeswitch.consoleLog("info", "connect operator: " .. string.format("%s", result));
+                            if (result == true) then
+                                break;
+                            end
                         end
                         freeswitch.consoleLog("info", fsname .. " End Process Connect CSRs");
                         -- return 1;
@@ -382,9 +408,23 @@ function process(plan)
                             current_retry_error = plan["current_retry_error"]
                         end
                         -- process ivr after digit
-                        if (digit ~= nil and digit ~= "") then
-                            -- TODO API PBX dtmf
+                        if (digit ~= "") then
+                            local url_request = url_api_vbee_dtmf .. " POST " ..
+                                "caller_id=" .. caller_number ..
+                                "&call_id=" .. uuid ..
+                                "&key=" .. digit ..
+                                "&state=DTMF" ..
+                                "&disposition=ANSWERED" .. 
+                                "&uuid=" .. uuid ..
+                                "&event_timestamp=" .. api:getTime() ..
+                                "&recording_path=" .. record_path;
                             
+                            if (url_callback) then
+                                url_request = url_request .. "&url_callback";
+                            end
+                            freeswitch.consoleLog("info", fsname .. ">>>>>>>>>>>> DTMF Log: " .. url_request);
+                            api:executeString("luarun http_async.lua " .. url_request);
+                            DTMF = DTMF .. digit .. "-";
                             -- correct digit input
                             if (type(plan[digit]) == "table") then
                                 -- set back x1 for plan_digit
@@ -396,6 +436,52 @@ function process(plan)
                                 end
                                 
                                 loop_count = 0;
+                                process(plan_digit);
+                                return 1;
+                            end
+                            -- User Wrong Input
+                            if (plan[digit] ~= nil and plan["start_wrong_input"] and plan["start_end_script"]) then
+                                freeswitch.consoleLog("info", ">>>>>>>>>>>> [" .. caller_number .. "] Start User Wrong Input >>>>>>>>>>>>\n");
+                                current_retry_error = current_retry_error + 1;
+                                plan_digit = plan["start_wrong_input"];
+                                plan_digit.origin = plan;
+
+                                if (current_retry_error > retry_error) then
+                                    freeswitch.consoleLog("info", ">>>>>>>>>>>> [" .. caller_number .. "] Start End Script >>>>>>>>>>>>\n");
+                                    plan_digit = plan["start_wrong_input"];
+                                    plan_digit.origin = plan["start_end_script"];
+                                    plan_digit.is_end = true; -- end ivr
+                                end
+                                plan_digit.timeout = 1; -- no listen input key
+                                process(plan_digit);
+                                return 1;
+                            end
+                        else
+                            if (plan["origin"]) then
+                                plan_digit = plan["origin"];
+                                if (plan["is_end"] == true) then
+                                    plan_digit.is_end = true;
+                                end
+                                process(plan_digit);
+                                return 1;
+                            end
+                            if (plan["is_end"] == true) then
+                                return 1;
+                            end
+                            -- user no response
+                            if (plan["start_no_response"] ~= nil and plan["start_end_script"] ~= nil) then
+                                freeswitch.consoleLog("info", ">>>>>>>>>>>> [" .. caller_number .. "] Start No User Response >>>>>>>>>>>>\n");
+                                current_retry_error = current_retry_error + 1;
+                                plan_digit = plan["start_no_response"];
+                                plan_digit.origin = plan;
+
+                                if (current_retry_error > retry_error) then
+                                    freeswitch.consoleLog("info", ">>>>>>>>>>>> [" .. caller_number .. "] Start End Script >>>>>>>>>>>>\n");
+                                    plan_digit = plan["start_no_response"];
+                                    plan_digit.origin = plan["start_end_script"];
+                                    plan_digit.is_end = true; -- end ivr
+                                end
+                                plan_digit.timeout = 1; -- no listen input key
                                 process(plan_digit);
                                 return 1;
                             end
@@ -418,7 +504,7 @@ function process(plan)
 end
 
 -- get ivr from controller
-getIVR(url_request, caller_number, sip_number)
+getIVR(domain_aicc .. "/api/v1/ivrs", caller_number, sip_number)
 -- check valid
 if (variable_string == "") then
     hold_music = session:getVariable("hold_music");

@@ -37,6 +37,10 @@ call_id = event:getHeader("variable_call_id")
 if (call_id == nil) then
   call_id = ""
 end
+agent_id = event:getHeader("variable_agent_id")
+if (agent_id == nil) then
+  agent_id = ""
+end
 
 freeswitch.consoleLog("info", "Header Info: {" ..
     "\nAnswer-State: " .. string.format("%s", answer_state) .. 
@@ -52,6 +56,8 @@ freeswitch.consoleLog("info", "Header Info: {" ..
     "\nconnect_operator: " .. string.format("%s", connect_operator) ..
     "\ncallee_id: " .. string.format("%s", callee_id) ..
     "\ncall_uuid: " .. string.format("%s", call_uuid) ..
+    "\ncall_id: " .. string.format("%s", call_id) ..
+    "\nagent_id: " .. string.format("%s", agent_id) ..
     "\nurl_api_vbee_dtmf: " .. string.format("%s", url_api_vbee_dtmf) ..
 "\n}");
 
@@ -75,6 +81,8 @@ if (disposition ~= "WRONG_CALL_STATE") then
     if (connect_operator == nil) then
         request_url = request_url .. "&key=-&state=answered&disposition=ANSWERED";
     else
+        -- TODO Call API Callback Agent
+        -- 
         request_url = request_url .. "&key=connected_operator&state=DTMF&disposition=ANSWERED&callee_id=" .. callee_id;
     end
 
