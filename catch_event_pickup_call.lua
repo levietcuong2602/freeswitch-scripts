@@ -27,7 +27,6 @@ url_api_vbee_dtmf = event:getHeader("variable_url_api_vbee_dtmf");
 freeswitch.consoleLog("info", "variable_url_api_vbee_dtmf= " .. url_api_vbee_dtmf);
 if (url_api_vbee_dtmf == nil) then
     url_api_vbee_dtmf = "https://api-dev.vbeecore.com/api/ezcall/event_dtmf post";
-    -- url_api_vbee_dtmf = "http://0c32f5896339.ngrok.io/api/v1/event-call post";
 end
 if string.sub(url_api_vbee_dtmf, -4) ~= "post" then
     url_api_vbee_dtmf = url_api_vbee_dtmf .. " post";
@@ -40,6 +39,10 @@ end
 agent_id = event:getHeader("variable_agent_id")
 if (agent_id == nil) then
   agent_id = ""
+end
+url_callback = event:getHeader("variable_url_callback")
+if (url_callback == nil) then
+  url_callback = ""
 end
 
 freeswitch.consoleLog("info", "Header Info: {" ..
@@ -57,7 +60,9 @@ freeswitch.consoleLog("info", "Header Info: {" ..
     "\ncallee_id: " .. string.format("%s", callee_id) ..
     "\ncall_uuid: " .. string.format("%s", call_uuid) ..
     "\ncall_id: " .. string.format("%s", call_id) ..
+    "\nrecord_path: " .. string.format("%s", record_path) ..
     "\nagent_id: " .. string.format("%s", agent_id) ..
+    "\nurl_callback: " .. string.format("%s", url_callback) ..
     "\nurl_api_vbee_dtmf: " .. string.format("%s", url_api_vbee_dtmf) ..
 "\n}");
 

@@ -36,6 +36,14 @@ call_id = event:getHeader("variable_call_id")
 if (call_id == nil) then
   call_id = ""
 end
+agent_id = event:getHeader("variable_agent_id")
+if (agent_id == nil) then
+  agent_id = ""
+end
+url_callback = event:getHeader("variable_url_callback")
+if (url_callback == nil) then
+  url_callback = "123"
+end
 
 freeswitch.consoleLog("info", "Header Info: {" ..
     "\nAnswer-State: " .. string.format("%s", answer_state) .. 
@@ -51,7 +59,10 @@ freeswitch.consoleLog("info", "Header Info: {" ..
     "\nconnect_operator: " .. string.format("%s", connect_operator) ..
     "\ncallee_id: " .. string.format("%s", callee_id) ..
     "\ncall_uuid: " .. string.format("%s", call_uuid) ..
+    "\ncall_id: " .. string.format("%s", call_id) ..
     "\nrecord_path: " .. string.format("%s", record_path) ..
+    "\nagent_id: " .. string.format("%s", agent_id) ..
+    "\nurl_callback: " .. string.format("%s", url_callback) ..
     "\nurl_api_vbee_dtmf: " .. string.format("%s", url_api_vbee_dtmf) ..
 "\n}");
 

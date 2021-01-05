@@ -11,10 +11,10 @@ uuid = session:getVariable("uuid");
 client_redis = redis.connect("127.0.0.1", 6379);
 local response = client_redis:ping();
 freeswitch.consoleLog("info", "check redis ping: " .. string.format("%s", response));
--- caller_number = session:getVariable("caller_id_number");
--- sip_number = session:getVariable("destination_number");
-caller_number = "0395468807";
-sip_number = "0913647743";
+caller_number = session:getVariable("caller_id_number");
+sip_number = session:getVariable("destination_number");
+-- caller_number = "0395468807";
+-- sip_number = "0913647743";
 -- init variables
 call_id = "";
 server_ip = "";
@@ -22,10 +22,8 @@ variable_string = "";
 file_ext = ".wav";
 DTMF = "-";
 url_callback = "";
-domain_aicc = "http://7e242c69e496.ngrok.io";
--- domain_aicc = "https://api-inbound.iristech.club";
--- url_request = "https://api-inbound.iristech.club/api/v1/ivrs";
--- url_request = "http://7e242c69e496.ngrok.io/api/v1/ivrs";
+domain_aicc = "https://api-inbound.iristech.club";
+-- domain_aicc = " http://e8748740909c.ngrok.io";
 url_api_vbee_dtmf = "https://pbx-zone0-api.vbeecore.com/api/v1/calls/callback";
 session:setVariable("url_api_vbee_dtmf", url_api_vbee_dtmf);
 
@@ -72,8 +70,10 @@ function getIVR(url_request, caller_id, callee_id)
     response = JSON:decode(response)
     if (response["status"] == 1) then
         variable_string = JSON:encode(response["result"]["dial_plan"]);;
-        url_callback = response["result"]["call_back"];
+        url_callback = response["result"]["callback"];
         server_ip = response["result"]["sip_ip"];
+
+        session:setVariable("url_callback", url_callback);
         if (response["result"]["call_id"]) then
             call_id = response["result"]["call_id"];
         end
@@ -178,6 +178,7 @@ function executeBrigdeSoftphone(callee_id_number, agent_id)
         ",connect_operator=true" .. 
         ",callee_id=" .. callee_id_number ..
         ",agent_id=" .. agent_id ..
+        ",url_callback=" .. url_callback ..
         "}" .. url_sip;
     freeswitch.consoleLog("info", fsname .. "execute bridge " .. string_bridge);
     session:execute("bridge", string_bridge);
@@ -186,6 +187,8 @@ function executeBrigdeSoftphone(callee_id_number, agent_id)
     local originate_disposition = session:getVariable("originate_disposition"); -- get code return hangup cause
     freeswitch.consoleLog("info", fsname .. " Bridged originate_disposition :" .. originate_disposition .. "\n")
     if (includes(FAILURE_HANGUP_CAUSES, originate_disposition)) then
+        -- TODO callback log agent reject call
+        
         return 1;
     end
 
@@ -213,7 +216,7 @@ function wakeupAndBridgeSoftPhone(callee_id_number, agent_id)
         local result = executeBrigdeSoftphone(callee_id_number, agent_id);
 
         if (result == 1 or result == 2) then
-            return true;
+            return result;
         elseif (result == 0) then
             freeswitch.consoleLog("info", "[" ..caller_number .. " >>>>>>>>>>>> " .. callee_id_number .. "] Sleep 3000ms\n");
             if (is_request_wakeup == false) then
@@ -243,7 +246,8 @@ function executeBrigde(callee_id_number, agent_id)
         local command, number = string.match(callee_id_number, "(sip_)(.*)");
         freeswitch.consoleLog("info", "{ callee_id_number=" ..callee_id_number .. ", command=" .. string.format("%s", command) .. ", number=" .. string.format("%s", number) .. " }");
         if (number) then
-            return wakeupAndBridgeSoftPhone(number, agent_id);
+            local result = wakeupAndBridgeSoftPhone(number, agent_id);
+            return result == 2;
         end
     end
 
@@ -330,16 +334,23 @@ function process(plan)
                         end
                     elseif (action["action"] == "CONNECT_AGENT" and action["connect_queue_id"]) then
                         local connect_queue_id = action["connect_queue_id"];
-                        freeswitch.consoleLog("info", "[" .. caller_number .. "] >>>>>>>>>>>> Connect To CSRs with queue id:" .. action["connect_queue_id"] .. " >>>>>>>>>>>>\n");
                         -- call api get agent
-                        local agent_info = getAgentInfo(connect_queue_id, call_id);
-                        if (agent_info) then
-                            local phone_operator = agent_info["operator"];
-                            local agent_id = agent_info["agent_id"];
-                            freeswitch.consoleLog("info", "phone_operator=" .. phone_operator .. ", agent_id=" .. agent_id);
-                            local result = executeBrigde(phone_operator, agent_id);
-                            freeswitch.consoleLog("info", "connect operator: " .. string.format("%s", result));
-                            if (result == true) then
+                        while (true) do
+                            freeswitch.consoleLog("info", "[" .. caller_number .. "] >>>>>>>>>>>> Connect To CSRs with queue id:" .. action["connect_queue_id"] .. " >>>>>>>>>>>> index: " .. (repeat_operator_idx + 1) .. "\n");
+                            local agent_info = getAgentInfo(connect_queue_id, call_id);
+                            if (agent_info) then
+                                local phone_operator = agent_info["operator"];
+                                local agent_id = agent_info["agent_id"];
+                                if (phone_operator == nil) then
+                                    break;
+                                end
+                                freeswitch.consoleLog("info", "phone_operator=" .. phone_operator .. ", agent_id=" .. agent_id);
+                                local result = executeBrigde(phone_operator, agent_id);
+                                freeswitch.consoleLog("info", "connect operator: " .. string.format("%s", result));
+                                if (result == true) then
+                                    break;
+                                end
+                            else
                                 break;
                             end
                         end
@@ -420,7 +431,7 @@ function process(plan)
                                 "&recording_path=" .. record_path;
                             
                             if (url_callback) then
-                                url_request = url_request .. "&url_callback";
+                                url_request = url_request .. "&url_callback=" .. url_callback;
                             end
                             freeswitch.consoleLog("info", fsname .. ">>>>>>>>>>>> DTMF Log: " .. url_request);
                             api:executeString("luarun http_async.lua " .. url_request);
@@ -504,7 +515,7 @@ function process(plan)
 end
 
 -- get ivr from controller
-getIVR(domain_aicc .. "/api/v1/ivrs", caller_number, sip_number)
+getIVR(domain_aicc .. "/api/v1/calls/init-call", caller_number, sip_number)
 -- check valid
 if (variable_string == "") then
     hold_music = session:getVariable("hold_music");
