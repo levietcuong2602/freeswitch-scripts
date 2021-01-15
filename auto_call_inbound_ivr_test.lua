@@ -1,3 +1,4 @@
+base_dir = "/usr/local/freewitch";
 JSON = (loadfile "/usr/local/freeswitch/scripts/JSON.lua")();
 
 package.path = "/usr/share/lua/5.2/?.lua;/usr/local/freeswitch/scripts/utils/?.lua;" .. package.path
@@ -13,8 +14,15 @@ local response = client_redis:ping();
 freeswitch.consoleLog("info", "check redis ping: " .. string.format("%s", response));
 caller_number = session:getVariable("caller_id_number");
 sip_number = session:getVariable("destination_number");
--- caller_number = "0395468807";
--- sip_number = "0913647743";
+
+caller_number = "20006";
+sip_number = "34";
+-- stt config
+recogtimeout = 5000;
+noinputtimeout = 15000;
+speech_complete_timeout = 1;
+mrcp_host = "vvmrcp-37-record";
+
 -- init variables
 call_id = "";
 server_ip = "";
@@ -22,7 +30,17 @@ variable_string = "";
 file_ext = ".wav";
 DTMF = "-";
 url_callback = "";
-domain_aicc = "https://api-inbound.iristech.club";
+url_callback_voice_bot = "https://cp-dev.aicallcenter.vn/api/campaigns/3996/calls/6588cc2b-5d8d-4bae-9463-83a7785d2f76/voicebot-callback";
+domain_aicc = "http://ea6dcdd8600c.ngrok.io";
+-- domain_aicc = "https://api-inbound.iristech.club";
+stt_domain = "";
+app_id = "";
+ws_end_point = "";
+recognize_model = "";
+drop_step = "INIT";
+text_init_bot = "";
+sip_call_out = "";
+
 -- domain_aicc = " http://e8748740909c.ngrok.io";
 url_api_vbee_dtmf = "https://pbx-zone0-api.vbeecore.com/api/v1/calls/callback";
 session:setVariable("url_api_vbee_dtmf", url_api_vbee_dtmf);
@@ -35,7 +53,36 @@ g_record_dir = "/var/lib/freeswitch/recordings/";
 record_path = time_path .. "/" .. string.sub(caller_number, 2) .. "-" .. uuid .. file_ext;
 fsname = "[" .. caller_number .. "] AUTO_CALL_INBOUND >>>> ";
 
--- define function
+function requestAPI(request_function, request_params, method)
+    local request_url = request_function;
+    if (not session:ready()) then
+        freeswitch.consoleLog("info", "not session request api: " .. request_function);
+        return;
+    end
+
+    if (request_params ~= nil and type(request_params) == "table") then
+        local params_url = ""
+        for k, v in pairs(request_params) do
+            if (params_url == "") then
+                params_url = k .. "=" .. v;
+            else
+                params_url = params_url .. "&" .. k .. "=" .. v;
+            end
+        end
+        if (params_url ~= "" and method == nil) then
+            request_url = request_url .. "?";
+        end
+
+        request_url = request_url .. params_url;
+    end
+
+    request_url = request_url .. "&event_timestamp=" .. (os.time() * 1000);
+
+    freeswitch.consoleLog("info", "Request API URL: " .. request_url);
+    local response = api:execute("curl", request_url);
+    return response;
+end
+
 function requestAPIAsyn(request_function, request_params, has_call_back)
     local request_url = request_function;
     if string.sub(request_url, -4) ~= "post" then
@@ -72,11 +119,11 @@ function getIVR(url_request, caller_id, callee_id)
         variable_string = JSON:encode(response["result"]["dial_plan"]);;
         url_callback = response["result"]["callback"];
         server_ip = response["result"]["sip_ip"];
+        call_id = response["result"]["call_id"];
+        -- TODO
+        -- url_callback_voice_bot = response["result"]["url_callback_voice_bot"];
 
         session:setVariable("url_callback", url_callback);
-        if (response["result"]["call_id"]) then
-            call_id = response["result"]["call_id"];
-        end
     end
 end
 
@@ -265,6 +312,219 @@ function getAgentInfo(connect_queue_id, call_id)
         return response["result"];
     end
     return false;
+end
+
+local char_to_hex = function(c) 
+    return string.format("%%%02X", string.byte(c)) 
+end
+
+local function urlencode(url)
+    if (url == nil )then 
+        return 
+    end
+    url = url:gsub("\n", "\r\n");
+    url = url:gsub("([^%w ])", char_to_hex);
+    url = url:gsub(" ", "+");
+    return url;
+end
+
+function uriencode(vals)
+    function escape(s)
+        s = string.gsub(s, '([\r\n"#%%&+:;<=>?@^`{|}%\\%[%]%(%)$!~,/\'])',
+                        function(c)
+            return '%' .. string.format("%02X", string.byte(c));
+        end);
+        s = string.gsub(s, "%s", "+");
+        return s;
+    end
+
+    function encode(t)
+        local s = "";
+        for k, v in pairs(t) do
+            s = s .. "&" .. escape(k) .. "=" .. escape(v);
+        end
+        return string.sub(s, 2);
+    end
+
+    if type(vals) == 'table' then
+        return encode(vals);
+    else
+        return urlencode(vals);
+    end
+end
+
+function get_params_request(type_speech)
+    local params_request = 
+        "recognize_model_" .. recognize_model .. "_" ..
+        "vais_timeout7000" .. "_" .. type_speech .. "_" .. caller_number ..
+        "_" .. sip_number .. "#" .. uuid .. "#";
+    
+    return params_request;
+end
+
+function checkTimeConnect(action)
+    freeswitch.consoleLog("info", "Check Time Connect Bot: " .. JSON:encode(action));
+
+    local connect_times = action['connect_times'];
+    if (connect_times and type(connect_times) == 'table') then
+        local current_time = tonumber(api:getTime());
+        local is_between_connect_time = false;
+
+        for k, connect_time in ipairs(connect_times) do
+            freeswitch.consoleLog("info", "current time: " .. tostring(current_time) .. " - start time: " .. tostring(connect_time.start_time) .. " - end time: " .. tostring(connect_time.end_time) .. "\n");
+            if (current_time >= connect_time.start_time and current_time <= connect_time.end_time) then
+                is_between_connect_time = true;
+            end
+        end
+
+        if (is_between_connect_time == false) then
+            if (action['start_no_connect']) then
+                session:setVariable("playback_terminators", "none");
+                session:execute("playback", action['start_no_connect']);
+            end
+
+            return false;
+        end
+    end
+
+    return true;
+end
+
+function processBotResponse(actions)
+    drop_step = "BOT_ANSWER";
+
+    for k, action in ipairs(actions) do
+        local type = action.attachment.type;
+        if (action.expectedDataType ~= nil) then
+            recognize_model = action.expectedDataType;
+        end
+
+        if (type ~= nil and type == "END_CALL") then
+            local end_code = action.attachment.payload.end_code;
+
+            if (end_code ~= nil or end_code ~= "") then
+                params = {};
+                params["action"] = "statistics";
+                params["end_code"] = uriencode("end_code");
+                requestAPI(url_callback_voice_bot, params);
+            end
+        end
+    end
+
+    for k, action in ipairs(actions) do
+        local type = action.attachment.type;
+        freeswitch.consoleLog("info", "Voicebot Action Type: " .. type .. "\n");
+        if (type == "PERSONALIZE_TEXT" or type == "OPTION") then
+            local text = action.attachment.payload.content;
+            local url_cache = action.attachment.payload.url_cache;
+            if (url_cache ~= nil and url_cache ~= "") then
+                freeswitch.consoleLog("info", "Voicebot play personalize cache url: " .. url_cache .. "\n");
+                session:execute("playback", url_cache);
+            else
+                params = {};
+                params["action"] = "tts";
+                params["input_text"] = uriencode(text);
+                local tts_response = requestAPI(url_callback_voice_bot, params);
+                freeswitch.consoleLog("info", "Voicebot tts response: " .. tts_response .. "\n");
+
+                tts_response = JSON:decode(tts_response);
+                if (tts_response.status == 1) then
+                    session:execute("playback", tts_response.results);
+                end
+            end
+        elseif (type == "RECORD") then
+            local url = action.attachment.payload.url;
+            freeswitch.consoleLog("info", "Voicebot play audio result: " .. url .. "\n");
+            session:execute("playback", url);
+        elseif (type == "CSR") then
+            -- TODO
+            math.randomseed(os.time());
+            local csrs = action.attachment.payload.csrs;
+            freeswitch.consoleLog("info", ">>>>>>>>>>>>>> Chuyen tiep cho tdv >>>>>>>>>>>> \n");
+            for k, phone_operator in ipairs(csrs) do
+                local result = executeBrigdeMobile(phone_operator);
+                if (result == true) then
+                    break;
+                end
+            end
+
+        elseif (type == "END_CALL") then
+            freeswitch.consoleLog("info", "Voicebot action hangup call ... " .. "\n");
+            return false;
+        end
+    end
+
+    return true;
+end
+
+function processBot()
+    local idx = 0;
+    local max_loop = 10;
+    local params = {};
+    
+    if (text_init_bot == nil or text_init_bot == "") then
+        text_init_bot = "bắt đầu";
+    end
+
+    params['text'] = uriencode(text_init_bot);
+    params['end_point'] = uriencode(ws_end_point);
+    params['app_id'] = uriencode(app_id);
+    params['version'] = '1.2';
+    params['session_id_lua'] = uuid;
+
+    local text_start = requestAPIAsyn(stt_domain, params);
+    freeswitch.consoleLog("info", "Voicebot: " .. text_start);
+
+    local data = JSON:decode(text_start);
+
+    if (data.data ~= nil) then
+        if (data.session_id ~= nil) then
+            params = {};
+            params['action'] = "statistics";
+            params['session_id'] = urlencode(data.session_id);
+
+            -- callback voicebot
+            -- requestAPIAsyn(url_callback_voice_bot, params);
+        end
+
+        processBotResponse(data.data);
+    else
+        return;
+    end
+
+    while (idx < max_loop) do
+        drop_step = "SYSTEM_LISTEN";
+        if (not session:ready()) then
+            return;
+        end
+
+        session:setVariable("playback_terminators", "any");
+        session:setVariable("play_and_detect_speech_close_asr", "true");
+        session:execute("play_and_detect_speech", 
+            base_dir .. "/make_audio_template/slience_3s.wav detect:unimrcp:" .. mrcp_host .. 
+            " {start-input-timers=false,no-input-timeout=" .. noinputtimeout .. 
+            ",speech_complete_timeout=" .. speech_complete_timeout .. 
+            ",recognition-timeout=" .. recogtimeout .. 
+            "}builtin:gammar/text_chatbot_" .. get_params_request("general")
+        );
+
+        local text_process = session:getVariable("detect_speech_result");
+        if (text_process ~= nil) then
+            freeswitch.consoleLog("info", "Voicebot " .. text_process);
+            local actions = JSON:decode(text_process);
+            result = processBotResponse(actions);
+
+            if (result == false) then
+                drop_step = "END_CODE_NORMAL";
+                return;
+            end
+        else
+            freeswitch.consoleLog("info", "Voicebot return null");
+        end
+
+        idx = idx + 1;
+    end
+
 end
 
 loop_count = 0;
@@ -496,6 +756,17 @@ function process(plan)
                                 process(plan_digit);
                                 return 1;
                             end
+                        end
+                    elseif(action['action'] == "CONNECT_BOT") then
+                        stt_domain = action['stt_domain'];
+                        mrcp_host = action['stt_name'];
+                        app_id = action['app_id'];
+                        ws_end_point = action['ws_end_point'];
+                        text_init_bot = action['text_init_point'];
+
+                        local is_connect = checkTimeConnect(action);
+                        if (is_connect) then
+                            processBot();
                         end
                     else
                         freeswitch.consoleLog("info", "[" .. caller_number .. "] >>>>>>>>>>>> Process action : " .. action["action"] .. " >>>>>>>>>>>> Invalid Action >>>>>>>>>>>>\n");
